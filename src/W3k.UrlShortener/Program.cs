@@ -38,111 +38,116 @@ public class Program
             serviceOptions.Windows.DisplayName = appName;
             serviceOptions.Windows.FailureActionType = WindowsServiceActionType.Restart;
 
-            var builder = WebApplication.CreateBuilder(args);
-            builder.Host.UseSerilog().UseServiceSelf();
-
-            builder.Services.AddMemoryCache();
-            builder.Services.AddDbContextPool<UrlShortenerDbContext>(options =>
+            if (Service.UseServiceSelf(args, appName, serviceOptions))
             {
-                options.UseSqlite(builder.Configuration.GetConnectionString("Default"));
-            });
+                Log.Information($"{appName} running");
 
-            var app = builder.Build();
+                var builder = WebApplication.CreateBuilder(args);
+                builder.Host.UseSerilog().UseServiceSelf();
 
-            using (var serviceScope = app.Services.GetRequiredService<IServiceScopeFactory>().CreateScope())
-            {
-                var context = serviceScope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>();
-                context.Database.EnsureCreated();
-            }
-
-            app.UseDefaultFiles();
-            app.UseStaticFiles();
-
-            app.MapGet("/{key}", async (string key, HttpContext httpContext) =>
-            {
-                if (string.IsNullOrEmpty(key))
+                builder.Services.AddMemoryCache();
+                builder.Services.AddDbContextPool<UrlShortenerDbContext>(options =>
                 {
-                    httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
-                    await httpContext.Response.WriteAsync("NotFound");
-                    return;
-                }
-
-                var cache = httpContext.RequestServices.GetRequiredService<IMemoryCache>();
-                string cacheKey = $"s:{key}";
-                string cacheVal = await cache.GetOrCreateAsync(cacheKey, async entry =>
-                {
-                    var db = httpContext.RequestServices.GetRequiredService<UrlShortenerDbContext>();
-                    var urlMapping = await db.UrlMappings.AsNoTracking().FirstOrDefaultAsync(p => p.Key == key);
-                    if (urlMapping == null)
-                    {
-                        entry.AbsoluteExpirationRelativeToNow = TimeSpan.Zero;
-                    }
-                    return urlMapping?.OriginalUrl;
+                    options.UseSqlite(builder.Configuration.GetConnectionString("Default"));
                 });
 
-                if (string.IsNullOrEmpty(cacheVal))
+                var app = builder.Build();
+
+                using (var serviceScope = app.Services.GetRequiredService<IServiceScopeFactory>().CreateScope())
                 {
-                    httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
-                    await httpContext.Response.WriteAsync("NotFound");
-                    return;
+                    var context = serviceScope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>();
+                    context.Database.EnsureCreated();
                 }
 
-                var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+                app.UseDefaultFiles();
+                app.UseStaticFiles();
 
-                httpContext.Response.StatusCode = StatusCodes.Status301MovedPermanently;
-                httpContext.Response.Headers.TryAdd("Location", cacheVal);
-                return;
-            });
-
-            app.MapPost("/api/v1/shorten", async ([FromBody] ShortenReq req, [FromServices] IConfiguration configuration, [FromServices] UrlShortenerDbContext db) =>
-            {
-                var result = new Result();
-
-                string originalUrl = req?.OriginalUrl;
-
-                if (string.IsNullOrEmpty(originalUrl))
+                app.MapGet("/{key}", async (string key, HttpContext httpContext) =>
                 {
-                    return new Result { Succeeded = false, Message = "The URL cannot be empty" };
-                }
-
-                if (Uri.TryCreate(originalUrl, UriKind.Absolute, out var uriResult) && (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
-                {
-                    string key = GenerateKey(originalUrl);
-
-                    var urlMapping = await db.UrlMappings.FirstOrDefaultAsync(p => p.Key == key);
-
-                    if (urlMapping != null)
+                    if (string.IsNullOrEmpty(key))
                     {
-                        if (urlMapping.OriginalUrl != originalUrl)
+                        httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+                        await httpContext.Response.WriteAsync("NotFound");
+                        return;
+                    }
+
+                    var cache = httpContext.RequestServices.GetRequiredService<IMemoryCache>();
+                    string cacheKey = $"s:{key}";
+                    string cacheVal = await cache.GetOrCreateAsync(cacheKey, async entry =>
+                    {
+                        var db = httpContext.RequestServices.GetRequiredService<UrlShortenerDbContext>();
+                        var urlMapping = await db.UrlMappings.AsNoTracking().FirstOrDefaultAsync(p => p.Key == key);
+                        if (urlMapping == null)
                         {
-                            // TODO 
-                            return new Result { Succeeded = false, Message = "error!" };
+                            entry.AbsoluteExpirationRelativeToNow = TimeSpan.Zero;
                         }
+                        return urlMapping?.OriginalUrl;
+                    });
+
+                    if (string.IsNullOrEmpty(cacheVal))
+                    {
+                        httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+                        await httpContext.Response.WriteAsync("NotFound");
+                        return;
+                    }
+
+                    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+
+                    httpContext.Response.StatusCode = StatusCodes.Status301MovedPermanently;
+                    httpContext.Response.Headers.TryAdd("Location", cacheVal);
+                    return;
+                });
+
+                app.MapPost("/api/v1/shorten", async ([FromBody] ShortenReq req, [FromServices] IConfiguration configuration, [FromServices] UrlShortenerDbContext db) =>
+                {
+                    var result = new Result();
+
+                    string originalUrl = req?.OriginalUrl;
+
+                    if (string.IsNullOrEmpty(originalUrl))
+                    {
+                        return new Result { Succeeded = false, Message = "The URL cannot be empty" };
+                    }
+
+                    if (Uri.TryCreate(originalUrl, UriKind.Absolute, out var uriResult) && (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
+                    {
+                        string key = GenerateKey(originalUrl);
+
+                        var urlMapping = await db.UrlMappings.FirstOrDefaultAsync(p => p.Key == key);
+
+                        if (urlMapping != null)
+                        {
+                            if (urlMapping.OriginalUrl != originalUrl)
+                            {
+                                // TODO Duplicate key
+                                return new Result { Succeeded = false, Message = "error!" };
+                            }
+                        }
+                        else
+                        {
+                            urlMapping = new UrlMapping(key, originalUrl);
+                            await db.UrlMappings.AddAsync(urlMapping);
+                            await db.SaveChangesAsync();
+                        }
+
+                        return new Result { Succeeded = true, Data = $"{configuration["UrlShortenerSettings:Domain"]}/{key}" };
                     }
                     else
                     {
-                        urlMapping = new UrlMapping(key, originalUrl);
-                        await db.UrlMappings.AddAsync(urlMapping);
-                        await db.SaveChangesAsync();
+                        return new Result { Succeeded = false, Message = "Please enter the URL in the correct format" };
                     }
 
-                    return new Result { Succeeded = true, Data = $"{configuration["UrlShortenerSettings:Domain"]}/{key}" };
-                }
-                else
-                {
-                    return new Result { Succeeded = false, Message = "Please enter the URL in the correct format" };
-                }
+                    static string GenerateKey(string originalUrl)
+                    {
+                        byte[] bytes = Encoding.UTF8.GetBytes(originalUrl);
+                        int hash = (int)HashDepot.MurmurHash3.Hash32(bytes, 10010);
+                        string key = hash.ToBase62();
+                        return key;
+                    }
+                });
 
-                static string GenerateKey(string originalUrl)
-                {
-                    byte[] bytes = Encoding.UTF8.GetBytes(originalUrl);
-                    int hash = (int)HashDepot.MurmurHash3.Hash32(bytes, 10010);
-                    string key = hash.ToBase62();
-                    return key;
-                }
-            });
-
-            app.Run();
+                app.Run();
+            }
         }
         catch (Exception ex)
         {
