@@ -1,0 +1,92 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Shortener</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        input {
+            padding: 10px;
+            margin: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 60%;
+            max-width: 400px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+            button:hover {
+                background-color: #45a049;
+            }
+
+        #shortenedUrl {
+            margin: 20px;
+            padding: 10px;
+            background-color: #e9e9e9;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            max-width: 80%;
+            display: inline-block;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <h1>URL Shortener</h1>
+    <input type="text" id="originalUrlInput" placeholder="Enter a valid URL">
+    <button onclick="shortenUrl()">Shorten URL</button>
+    <div id="shortenedUrl"></div>
+
+    <script>
+        function shortenUrl() {
+            const originalUrlInput = document.getElementById('originalUrlInput').value;
+
+            fetch('/api/v1/shorten', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ OriginalUrl: originalUrlInput })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.succeeded) {
+                        const shortenedUrl = data.data;
+                        document.getElementById('shortenedUrl').innerText = `Shortened URL: ${shortenedUrl}`;
+                    } else {
+                        document.getElementById('shortenedUrl').innerText = `Error: ${data.message}`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('shortenedUrl').innerText = 'An error occurred. Please try again.';
+                });
+        }
+    </script>
+</body>
+</html>

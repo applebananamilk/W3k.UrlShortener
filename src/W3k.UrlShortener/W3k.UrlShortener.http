@@ -1,0 +1,9 @@
+@HostAddress = http://localhost:5187
+
+POST {{HostAddress}}/api/v1/shorten 
+Content-Type: application/json
+
+{
+  "OriginalUrl" : "https://www.baidu.com"
+}
+###
